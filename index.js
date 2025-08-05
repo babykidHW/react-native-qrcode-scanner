@@ -17,15 +17,7 @@ import {
 } from 'react-native';
 
 import { request, PERMISSIONS, RESULTS } from 'react-native-permissions';
-import { RNCamera as Camera } from 'react-native-camera';
-
-const CAMERA_FLASH_MODE = Camera.Constants.FlashMode;
-const CAMERA_FLASH_MODES = [
-  CAMERA_FLASH_MODE.torch,
-  CAMERA_FLASH_MODE.on,
-  CAMERA_FLASH_MODE.off,
-  CAMERA_FLASH_MODE.auto,
-];
+import { Camera, getCameraDevice } from 'react-native-vision-camera';
 
 export default class QRCodeScanner extends Component {
   static propTypes = {
@@ -51,7 +43,7 @@ export default class QRCodeScanner extends Component {
     permissionDialogMessage: PropTypes.string,
     buttonPositive: PropTypes.string,
     checkAndroid6Permissions: PropTypes.bool,
-    flashMode: PropTypes.oneOf(CAMERA_FLASH_MODES),
+    torch: PropTypes.oneOf(['on', 'off']),
     cameraProps: PropTypes.object,
     cameraTimeoutView: PropTypes.element,
   };
@@ -105,7 +97,7 @@ export default class QRCodeScanner extends Component {
     permissionDialogMessage: 'Need camera permission',
     buttonPositive: 'OK',
     checkAndroid6Permissions: false,
-    flashMode: CAMERA_FLASH_MODE.auto,
+    torch: 'off',
     cameraProps: {},
     cameraTimeoutView: (
       <View
@@ -132,10 +124,33 @@ export default class QRCodeScanner extends Component {
       isAuthorized: false,
       isAuthorizationChecked: false,
       disableVibrationByUser: false,
+      device: null,
     };
     this.timer = null;
     this._scannerTimeout = null;
-    this._handleBarCodeRead = this._handleBarCodeRead.bind(this);
+
+    this.codeScanner = {
+      codeTypes: ['qr'],
+      onCodeScanned: codes => {
+        if (
+          codes.length > 0 &&
+          !this.state.scanning &&
+          !this.state.disableVibrationByUser
+        ) {
+          if (this.props.vibrate) {
+            Vibration.vibrate();
+          }
+          this._setScanning(true);
+          this.props.onRead(codes[0]);
+          if (this.props.reactivate) {
+            this._scannerTimeout = setTimeout(
+              () => this._setScanning(false),
+              this.props.reactivateTimeout
+            );
+          }
+        }
+      },
+    };
   }
 
   componentDidMount() {
@@ -145,6 +160,9 @@ export default class QRCodeScanner extends Component {
           isAuthorized: cameraStatus === RESULTS.GRANTED,
           isAuthorizationChecked: true,
         });
+        if (cameraStatus === RESULTS.GRANTED) {
+          this._initializeCameraDevice();
+        }
       });
     } else if (
       Platform.OS === 'android' &&
@@ -158,9 +176,13 @@ export default class QRCodeScanner extends Component {
         const isAuthorized = granted === PermissionsAndroid.RESULTS.GRANTED;
 
         this.setState({ isAuthorized, isAuthorizationChecked: true });
+        if (isAuthorized) {
+          this._initializeCameraDevice();
+        }
       });
     } else {
       this.setState({ isAuthorized: true, isAuthorizationChecked: true });
+      this._initializeCameraDevice();
     }
 
     if (this.props.fadeIn) {
@@ -172,6 +194,16 @@ export default class QRCodeScanner extends Component {
           useNativeDriver: true,
         }),
       ]).start();
+    }
+  }
+
+  _initializeCameraDevice() {
+    try {
+      const devices = Camera.getAvailableCameraDevices();
+      const device = getCameraDevice(devices, this.props.cameraType);
+      this.setState({ device });
+    } catch (error) {
+      console.log('Error initializing camera device:', error);
     }
   }
 
@@ -221,22 +253,6 @@ export default class QRCodeScanner extends Component {
     );
   }
 
-  _handleBarCodeRead(e) {
-    if (!this.state.scanning && !this.state.disableVibrationByUser) {
-      if (this.props.vibrate) {
-        Vibration.vibrate();
-      }
-      this._setScanning(true);
-      this.props.onRead(e);
-      if (this.props.reactivate) {
-        this._scannerTimeout = setTimeout(
-          () => this._setScanning(false),
-          this.props.reactivateTimeout
-        );
-      }
-    }
-  }
-
   _renderTopContent() {
     if (this.props.topContent) {
       return this.props.topContent;
@@ -274,16 +290,10 @@ export default class QRCodeScanner extends Component {
   _renderCameraComponent() {
     return (
       <Camera
-        androidCameraPermissionOptions={{
-          title: this.props.permissionDialogTitle,
-          message: this.props.permissionDialogMessage,
-          buttonPositive: this.props.buttonPositive,
-        }}
         style={[styles.camera, this.props.cameraStyle]}
-        onBarCodeRead={this._handleBarCodeRead.bind(this)}
-        type={this.props.cameraType}
-        flashMode={this.props.flashMode}
-        captureAudio={false}
+        codeScanner={this.codeScanner}
+        device={this.state.device}
+        torch={this.props.torch}
         {...this.props.cameraProps}
       >
         {this._renderCameraMarker()}
@@ -350,7 +360,9 @@ export default class QRCodeScanner extends Component {
         <View style={[styles.infoView, this.props.topViewStyle]}>
           {this._renderTopContent()}
         </View>
-        <View style={this.props.cameraContainerStyle}>{this._renderCamera()}</View>
+        <View style={this.props.cameraContainerStyle}>
+          {this._renderCamera()}
+        </View>
         <View style={[styles.infoView, this.props.bottomViewStyle]}>
           {this._renderBottomContent()}
         </View>
