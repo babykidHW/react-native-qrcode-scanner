@@ -5,10 +5,9 @@
  */
 import { Component } from 'react';
 import { ViewStyle, StyleProp } from 'react-native';
-import { RNCameraProps, BarCodeReadEvent, Constants } from 'react-native-camera';
 
 export interface RNQRCodeScannerProps {
-  onRead(e: BarCodeReadEvent): void;
+  onRead(e: any): void;
   vibrate?: boolean;
   reactivate?: boolean;
   reactivateTimeout?: number;
@@ -29,8 +28,8 @@ export interface RNQRCodeScannerProps {
   permissionDialogMessage?: string;
   buttonPositive?: string;
   checkAndroid6Permissions?: boolean;
-  flashMode?: keyof Constants['FlashMode'];
-  cameraProps?: RNCameraProps;
+  torch?: 'on' | 'off';
+  cameraProps?: any;
   cameraTimeout?: number;
   cameraTimeoutView?: JSX.Element;
 }
@@ -50,7 +49,7 @@ export default class QRCodeScanner extends Component<
   disable(): void;
   enable(): void;
   _setScanning(value: boolean): void;
-  _handleBarCodeRead(e: BarCodeReadEvent): void;
+  _handleBarCodeRead(e: any): void;
   _renderTopContent(): JSX.Element | null;
   _renderBottomContent(): JSX.Element | null;
   _renderCameraMarker(): JSX.Element | null;
