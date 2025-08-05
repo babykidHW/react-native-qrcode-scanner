@@ -60,5 +60,8 @@
   "funding": {
     "type": "opencollective",
     "url": "https://opencollective.com/react-native-qrcode-scanner"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
