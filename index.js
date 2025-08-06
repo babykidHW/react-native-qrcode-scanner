@@ -1,7 +1,13 @@
 'use strict';
 
-import React, { Component } from 'react';
-import PropTypes from 'prop-types';
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  forwardRef,
+  useImperativeHandle,
+} from 'react';
 
 import {
   StyleSheet,
@@ -17,47 +23,32 @@ import {
 } from 'react-native';
 
 import { request, PERMISSIONS, RESULTS } from 'react-native-permissions';
-import { Camera, getCameraDevice } from 'react-native-vision-camera';
+import {
+  Camera,
+  useCameraDevice,
+  useCodeScanner,
+} from 'react-native-vision-camera';
 
-export default class QRCodeScanner extends Component {
-  static propTypes = {
-    onRead: PropTypes.func.isRequired,
-    vibrate: PropTypes.bool,
-    reactivate: PropTypes.bool,
-    reactivateTimeout: PropTypes.number,
-    cameraTimeout: PropTypes.number,
-    fadeIn: PropTypes.bool,
-    showMarker: PropTypes.bool,
-    cameraType: PropTypes.oneOf(['front', 'back']),
-    customMarker: PropTypes.element,
-    containerStyle: PropTypes.any,
-    cameraStyle: PropTypes.any,
-    cameraContainerStyle: PropTypes.any,
-    markerStyle: PropTypes.any,
-    topViewStyle: PropTypes.any,
-    bottomViewStyle: PropTypes.any,
-    topContent: PropTypes.oneOfType([PropTypes.element, PropTypes.string]),
-    bottomContent: PropTypes.oneOfType([PropTypes.element, PropTypes.string]),
-    notAuthorizedView: PropTypes.element,
-    permissionDialogTitle: PropTypes.string,
-    permissionDialogMessage: PropTypes.string,
-    buttonPositive: PropTypes.string,
-    checkAndroid6Permissions: PropTypes.bool,
-    torch: PropTypes.oneOf(['on', 'off']),
-    cameraProps: PropTypes.object,
-    cameraTimeoutView: PropTypes.element,
-  };
-
-  static defaultProps = {
-    onRead: () => null,
-    reactivate: false,
-    vibrate: true,
-    reactivateTimeout: 0,
-    cameraTimeout: 0,
-    fadeIn: true,
-    showMarker: false,
-    cameraType: 'back',
-    notAuthorizedView: (
+const QRCodeScanner = forwardRef((props, ref) => {
+  const {
+    onRead,
+    vibrate = true,
+    reactivate: shouldReactivate = false,
+    reactivateTimeout = 0,
+    cameraTimeout = 0,
+    fadeIn = true,
+    showMarker = false,
+    cameraType = 'back',
+    customMarker,
+    containerStyle,
+    cameraStyle,
+    cameraContainerStyle,
+    markerStyle,
+    topViewStyle,
+    bottomViewStyle,
+    topContent,
+    bottomContent,
+    notAuthorizedView = (
       <View
         style={{
           flex: 1,
@@ -75,7 +66,7 @@ export default class QRCodeScanner extends Component {
         </Text>
       </View>
     ),
-    pendingAuthorizationView: (
+    pendingAuthorizationView = (
       <View
         style={{
           flex: 1,
@@ -93,13 +84,13 @@ export default class QRCodeScanner extends Component {
         </Text>
       </View>
     ),
-    permissionDialogTitle: 'Info',
-    permissionDialogMessage: 'Need camera permission',
-    buttonPositive: 'OK',
-    checkAndroid6Permissions: false,
-    torch: 'off',
-    cameraProps: {},
-    cameraTimeoutView: (
+    permissionDialogTitle = 'Info',
+    permissionDialogMessage = 'Need camera permission',
+    buttonPositive = 'OK',
+    checkAndroid6Permissions = false,
+    torch = 'off',
+    cameraProps = {},
+    cameraTimeoutView = (
       <View
         style={{
           flex: 0,
@@ -113,263 +104,229 @@ export default class QRCodeScanner extends Component {
         <Text style={{ color: 'white' }}>Tap to activate camera</Text>
       </View>
     ),
-  };
+  } = props;
 
-  constructor(props) {
-    super(props);
-    this.state = {
-      scanning: false,
-      isCameraActivated: true,
-      fadeInOpacity: new Animated.Value(0),
-      isAuthorized: false,
-      isAuthorizationChecked: false,
-      disableVibrationByUser: false,
-      device: null,
-    };
-    this.timer = null;
-    this._scannerTimeout = null;
+  const [isCameraActivated, setIsCameraActivated] = useState(true);
+  const [fadeInOpacity] = useState(() => new Animated.Value(0));
+  const [isAuthorized, setIsAuthorized] = useState(false);
+  const [isAuthorizationChecked, setIsAuthorizationChecked] = useState(false);
 
-    this.codeScanner = {
-      codeTypes: ['qr'],
-      onCodeScanned: codes => {
-        if (
-          codes.length > 0 &&
-          !this.state.scanning &&
-          !this.state.disableVibrationByUser
-        ) {
-          if (this.props.vibrate) {
-            Vibration.vibrate();
-          }
-          this._setScanning(true);
-          this.props.onRead(codes[0]);
-          if (this.props.reactivate) {
-            this._scannerTimeout = setTimeout(
-              () => this._setScanning(false),
-              this.props.reactivateTimeout
-            );
-          }
+  const device = useCameraDevice(cameraType);
+
+  const isScanning = useRef(false);
+  const scannerTimeoutRef = useRef(null);
+
+  const codeScanner = useCodeScanner({
+    codeTypes: ['qr'],
+    onCodeScanned: codes => {
+      if (codes.length > 0 && !isScanning.current) {
+        if (vibrate) {
+          Vibration.vibrate();
         }
-      },
-    };
-  }
-
-  componentDidMount() {
-    if (Platform.OS === 'ios') {
-      request(PERMISSIONS.IOS.CAMERA).then(cameraStatus => {
-        this.setState({
-          isAuthorized: cameraStatus === RESULTS.GRANTED,
-          isAuthorizationChecked: true,
-        });
-        if (cameraStatus === RESULTS.GRANTED) {
-          this._initializeCameraDevice();
-        }
-      });
-    } else if (
-      Platform.OS === 'android' &&
-      this.props.checkAndroid6Permissions
-    ) {
-      PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CAMERA, {
-        title: this.props.permissionDialogTitle,
-        message: this.props.permissionDialogMessage,
-        buttonPositive: this.props.buttonPositive,
-      }).then(granted => {
-        const isAuthorized = granted === PermissionsAndroid.RESULTS.GRANTED;
-
-        this.setState({ isAuthorized, isAuthorizationChecked: true });
-        if (isAuthorized) {
-          this._initializeCameraDevice();
-        }
-      });
-    } else {
-      this.setState({ isAuthorized: true, isAuthorizationChecked: true });
-      this._initializeCameraDevice();
-    }
-
-    if (this.props.fadeIn) {
-      Animated.sequence([
-        Animated.delay(1000),
-        Animated.timing(this.state.fadeInOpacity, {
-          toValue: 1,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-      ]).start();
-    }
-  }
-
-  _initializeCameraDevice() {
-    try {
-      const devices = Camera.getAvailableCameraDevices();
-      const device = getCameraDevice(devices, this.props.cameraType);
-      this.setState({ device });
-    } catch (error) {
-      console.log('Error initializing camera device:', error);
-    }
-  }
-
-  componentWillUnmount() {
-    if (this._scannerTimeout !== null) {
-      clearTimeout(this._scannerTimeout);
-    }
-    if (this.timer !== null) {
-      clearTimeout(this.timer);
-    }
-    this.timer = null;
-    this._scannerTimeout = null;
-  }
-
-  disable() {
-    this.setState({ disableVibrationByUser: true });
-  }
-  enable() {
-    this.setState({ disableVibrationByUser: false });
-  }
-
-  _setScanning(value) {
-    this.setState({ scanning: value });
-  }
-
-  _setCamera(value) {
-    this.setState(
-      {
-        isCameraActivated: value,
-        scanning: false,
-        fadeInOpacity: new Animated.Value(0),
-      },
-      () => {
-        if (value && this.props.fadeIn) {
-          if (this.props.fadeIn) {
-            Animated.sequence([
-              Animated.delay(10),
-              Animated.timing(this.state.fadeInOpacity, {
-                toValue: 1,
-                easing: Easing.inOut(Easing.quad),
-                useNativeDriver: true,
-              }),
-            ]).start();
-          }
+        isScanning.current = true;
+        onRead(codes[0]);
+        if (shouldReactivate) {
+          scannerTimeoutRef.current = setTimeout(
+            () => (isScanning.current = false),
+            reactivateTimeout
+          );
         }
       }
-    );
-  }
+    },
+  });
 
-  _renderTopContent() {
-    if (this.props.topContent) {
-      return this.props.topContent;
+  const cameraTimeoutRef = useRef(null);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      reactivate: () => {
+        isScanning.current = false;
+      },
+    }),
+    [isScanning]
+  );
+
+  const setCamera = useCallback(
+    value => {
+      setIsCameraActivated(value);
+      isScanning.current = false;
+      fadeInOpacity.setValue(0);
+
+      if (value && fadeIn) {
+        Animated.sequence([
+          Animated.delay(10),
+          Animated.timing(fadeInOpacity, {
+            toValue: 1,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: true,
+          }),
+        ]).start();
+      }
+    },
+    [fadeIn, fadeInOpacity]
+  );
+
+  useEffect(
+    () => {
+      const checkPermissions = async () => {
+        if (Platform.OS === 'ios') {
+          const cameraStatus = await request(PERMISSIONS.IOS.CAMERA);
+          setIsAuthorized(cameraStatus === RESULTS.GRANTED);
+          setIsAuthorizationChecked(true);
+        } else if (Platform.OS === 'android' && checkAndroid6Permissions) {
+          const granted = await PermissionsAndroid.request(
+            PermissionsAndroid.PERMISSIONS.CAMERA,
+            {
+              title: permissionDialogTitle,
+              message: permissionDialogMessage,
+              buttonPositive: buttonPositive,
+            }
+          );
+          const isAuthorized = granted === PermissionsAndroid.RESULTS.GRANTED;
+          setIsAuthorized(isAuthorized);
+          setIsAuthorizationChecked(true);
+        } else {
+          setIsAuthorized(true);
+          setIsAuthorizationChecked(true);
+        }
+      };
+
+      checkPermissions();
+
+      if (fadeIn) {
+        Animated.sequence([
+          Animated.delay(1000),
+          Animated.timing(fadeInOpacity, {
+            toValue: 1,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: true,
+          }),
+        ]).start();
+      }
+
+      return () => {
+        if (scannerTimeoutRef.current !== null) {
+          clearTimeout(scannerTimeoutRef.current);
+        }
+        if (cameraTimeoutRef.current !== null) {
+          clearTimeout(cameraTimeoutRef.current);
+        }
+        cameraTimeoutRef.current = null;
+        scannerTimeoutRef.current = null;
+      };
+    },
+    [
+      fadeIn,
+      fadeInOpacity,
+      checkAndroid6Permissions,
+      permissionDialogTitle,
+      permissionDialogMessage,
+      buttonPositive,
+    ]
+  );
+
+  useEffect(
+    () => {
+      if (cameraTimeout > 0 && isAuthorized && isCameraActivated) {
+        cameraTimeoutRef.current && clearTimeout(cameraTimeoutRef.current);
+        cameraTimeoutRef.current = setTimeout(
+          () => setCamera(false),
+          cameraTimeout
+        );
+      }
+    },
+    [cameraTimeout, isAuthorized, isCameraActivated, setCamera]
+  );
+
+  const renderTopContent = () => {
+    if (topContent) {
+      return topContent;
     }
     return null;
-  }
+  };
 
-  _renderBottomContent() {
-    if (this.props.bottomContent) {
-      return this.props.bottomContent;
+  const renderBottomContent = () => {
+    if (bottomContent) {
+      return bottomContent;
     }
     return null;
-  }
+  };
 
-  _renderCameraMarker() {
-    if (this.props.showMarker) {
-      if (this.props.customMarker) {
-        return this.props.customMarker;
+  const renderCameraMarker = () => {
+    if (showMarker) {
+      if (customMarker) {
+        return customMarker;
       } else {
         return (
           <View style={styles.rectangleContainer}>
             <View
-              style={[
-                styles.rectangle,
-                this.props.markerStyle ? this.props.markerStyle : null,
-              ]}
+              style={[styles.rectangle, markerStyle ? markerStyle : null]}
             />
           </View>
         );
       }
     }
     return null;
-  }
+  };
 
-  _renderCameraComponent() {
+  const renderCameraComponent = () => {
     return (
-      <Camera
-        style={[styles.camera, this.props.cameraStyle]}
-        codeScanner={this.codeScanner}
-        device={this.state.device}
-        torch={this.props.torch}
-        {...this.props.cameraProps}
-      >
-        {this._renderCameraMarker()}
-      </Camera>
+      <>
+        <Camera
+          style={[styles.camera, cameraStyle]}
+          codeScanner={codeScanner}
+          device={device}
+          torch={torch}
+          {...cameraProps}
+        />
+        {renderCameraMarker()}
+      </>
     );
-  }
+  };
 
-  _renderCamera() {
-    const {
-      notAuthorizedView,
-      pendingAuthorizationView,
-      cameraType,
-      cameraTimeoutView,
-    } = this.props;
-
-    if (!this.state.isCameraActivated) {
+  const renderCamera = () => {
+    if (!isCameraActivated) {
       return (
-        <TouchableWithoutFeedback onPress={() => this._setCamera(true)}>
+        <TouchableWithoutFeedback onPress={() => setCamera(true)}>
           {cameraTimeoutView}
         </TouchableWithoutFeedback>
       );
     }
 
-    const { isAuthorized, isAuthorizationChecked } = this.state;
     if (isAuthorized) {
-      if (this.props.cameraTimeout > 0) {
-        this.timer && clearTimeout(this.timer);
-        this.timer = setTimeout(
-          () => this._setCamera(false),
-          this.props.cameraTimeout
-        );
-      }
-
-      if (this.props.fadeIn) {
+      if (fadeIn) {
         return (
           <Animated.View
             style={{
-              opacity: this.state.fadeInOpacity,
+              opacity: fadeInOpacity,
               backgroundColor: 'transparent',
               height:
-                (this.props.cameraStyle && this.props.cameraStyle.height) ||
-                styles.camera.height,
+                (cameraStyle && cameraStyle.height) || styles.camera.height,
             }}
           >
-            {this._renderCameraComponent()}
+            {renderCameraComponent()}
           </Animated.View>
         );
       }
-      return this._renderCameraComponent();
+      return renderCameraComponent();
     } else if (!isAuthorizationChecked) {
       return pendingAuthorizationView;
     } else {
       return notAuthorizedView;
     }
-  }
+  };
 
-  reactivate() {
-    this._setScanning(false);
-  }
-
-  render() {
-    return (
-      <View style={[styles.mainContainer, this.props.containerStyle]}>
-        <View style={[styles.infoView, this.props.topViewStyle]}>
-          {this._renderTopContent()}
-        </View>
-        <View style={this.props.cameraContainerStyle}>
-          {this._renderCamera()}
-        </View>
-        <View style={[styles.infoView, this.props.bottomViewStyle]}>
-          {this._renderBottomContent()}
-        </View>
+  return (
+    <View style={[styles.mainContainer, containerStyle]}>
+      <View style={[styles.infoView, topViewStyle]}>{renderTopContent()}</View>
+      <View style={cameraContainerStyle}>{device ? renderCamera() : null}</View>
+      <View style={[styles.infoView, bottomViewStyle]}>
+        {renderBottomContent()}
       </View>
-    );
-  }
-}
+    </View>
+  );
+});
 
 const styles = StyleSheet.create({
   mainContainer: {
@@ -392,10 +349,10 @@ const styles = StyleSheet.create({
   },
 
   rectangleContainer: {
-    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'transparent',
+    ...StyleSheet.absoluteFillObject,
   },
 
   rectangle: {
@@ -406,3 +363,5 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
 });
+
+export default QRCodeScanner;
