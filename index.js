@@ -174,7 +174,7 @@ const QRCodeScanner = forwardRef((props, ref) => {
           const cameraStatus = await request(PERMISSIONS.IOS.CAMERA);
           setIsAuthorized(cameraStatus === RESULTS.GRANTED);
           setIsAuthorizationChecked(true);
-        } else if (Platform.OS === 'android' && checkAndroid6Permissions) {
+        } else if (Platform.OS === 'android') {
           const granted = await PermissionsAndroid.request(
             PermissionsAndroid.PERMISSIONS.CAMERA,
             {
